@@ -1,0 +1,73 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu:24.04, debian:trixie, archlinux:base-devel]
+        compiler: [gcc, clang]
+    steps:
+      - name: Install build tools
+        shell: bash
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential autoconf automake libncurses-dev clang python3 git ca-certificates pkg-config
+          else
+            pacman -Syu --noconfirm --needed base-devel autoconf automake ncurses clang python git pkgconf
+          fi
+      - uses: actions/checkout@v4
+      - name: Build, fixtures, meter integration and terminal smoke
+        env:
+          CC: ${{ matrix.compiler }}
+        run: tests/ci.sh "$RUNNER_TEMP/check"
+  sanitizers:
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential autoconf automake libncurses-dev clang libclang-rt-dev llvm python3 git ca-certificates valgrind
+      - uses: actions/checkout@v4
+      - name: ASan and UBSan
+        env:
+          CC: clang
+          CFLAGS: -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
+          TEST_CFLAGS: -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1
+          LSAN_OPTIONS: fast_unwind_on_malloc=0
+        run: tests/ci.sh "$RUNNER_TEMP/sanitize"
+      - name: Valgrind (no application leak suppressions)
+        run: |
+          tests/ci.sh "$RUNNER_TEMP/valgrind"
+          HTOP_PLUS_SYSROOT="$RUNNER_TEMP/valgrind/tests/fixtures/test_mixed" NVML_TEST_COUNT=2 LD_LIBRARY_PATH="$RUNNER_TEMP/valgrind/tests/stub" valgrind --leak-check=full --errors-for-leak-kinds=all --error-exitcode=1 "$RUNNER_TEMP/valgrind/tests/meters"
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static musl x86_64 candidate
+        run: |
+          mkdir -p "$RUNNER_TEMP/static"
+          docker run --name htop-plus-static --cpus=4 -v "$GITHUB_WORKSPACE:/source:ro" -v "$RUNNER_TEMP/static:/out" alpine:3.22 sh -c 'apk add --no-cache build-base linux-headers autoconf automake ncurses ncurses-dev ncurses-static curl ca-certificates python3 bash && /source/scripts/build-static.sh /out'
+      - name: Run with no runtime packages or terminfo files
+        run: |
+          printf '%s\n' 'FROM scratch' 'COPY htop-plus-linux-x86_64-musl /htop-plus' 'ENV TERM=xterm-256color' 'ENTRYPOINT ["/htop-plus"]' > "$RUNNER_TEMP/static/Dockerfile"
+          docker build -f "$RUNNER_TEMP/static/Dockerfile" -t htop-plus-minimal "$RUNNER_TEMP/static/artifacts"
+          docker run --name htop-plus-minimal-test --read-only --cpus=2 -t htop-plus-minimal -d 5 -n 5
+          git archive --format=tar.gz --prefix=htop-plus/ -o "$RUNNER_TEMP/static/artifacts/htop-plus-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: htop-plus-linux-x86_64-musl-candidate
+          path: ${{ runner.temp }}/static/artifacts/*
+          if-no-files-found: error
