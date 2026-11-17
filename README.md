@@ -84,8 +84,24 @@ screen, screen-256color, tmux, tmux-256color and vt100. The output directory hol
 **NVIDIA requires the normal source build.** A fully static musl executable cannot
 load NVML with `dlopen`; its NVIDIA meters therefore show n/a. AMD, disk and
 sysfs temperature meters remain supported. This limitation avoids adding a helper
-process or runtime dependency. Static candidates are CI artifacts only: publishing
-release assets and tags requires the repository owner's release gate.
+process or runtime dependency. Release builds include both glibc and static musl
+binaries. The glibc binary is built on Debian trixie; older distributions may need
+to build from source. Publishing release assets and tags requires the owner's gate.
+
+## Staying up to date
+
+The daily (or manual) **Sync upstream** action merges the newest stable htop tag
+on `sync/htop-X.Y.Z` and opens a PR with squash auto-merge after required CI.
+Conflicts open an issue listing files and leave `main` unchanged.
+
+The **Draft release** action builds and tests glibc (with optional NVIDIA NVML)
+and static musl binaries, then prepares `vX.Y.Z-plus.N` with source, licenses and
+checksums. The owner validates the candidates, creates/pushes the release tag at
+the draft's source commit, and publishes the draft. No workflow publishes or
+pushes release tags. Only `GITHUB_TOKEN` is needed.
+
+Before enabling the schedule, follow the [owner setup and workflow notes](.htop-plus/README.md),
+including making **CI** a required status check for `main`.
 
 ## Tests and CI
 
@@ -101,7 +117,8 @@ round-trips. Three terminal sizes exercise F2 and two seconds of live drawing.
 
 CI builds Ubuntu, Debian and Arch containers with GCC and Clang, plus separate
 ASan/UBSan, Valgrind and static candidate jobs. All sanitizer and Valgrind checks run without leak suppressions.
-No CI job publishes releases or tags.
+The CI workflow builds artifacts; the separate release workflow creates drafts.
+No workflow publishes releases or pushes release tags.
 
 ## License and credit
 

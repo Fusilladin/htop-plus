@@ -1,0 +1,42 @@
+name: Report CI status
+on:
+  workflow_run:
+    workflows: [Build and test]
+    types: [completed]
+permissions: {}
+jobs:
+  status:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      # No checkout or execution of code/artifacts from the triggering run.
+      # A commit status also covers explicitly dispatched bot-PR CI runs, whose
+      # workflow-job checks cannot themselves satisfy branch rulesets.
+      - name: Report the verified workflow conclusion on its exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID")
+          workflow_id=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml" --jq .id)
+          [[ $(jq -r .workflow_id <<< "$run") = "$workflow_id" ]]
+          [[ $(jq -r .path <<< "$run") = .github/workflows/ci.yml ]]
+          [[ $(jq -r .status <<< "$run") = completed ]]
+          event=$(jq -r .event <<< "$run")
+          case "$event" in push|pull_request|workflow_dispatch) ;; *) exit 0;; esac
+          # Approval-gated bot PR runs must not later overwrite the explicitly
+          # dispatched result for the same sync head with an approval timeout.
+          if [[ "$event" = pull_request && $(jq -r .actor.login <<< "$run") = 'github-actions[bot]' ]]; then exit 0; fi
+          sha=$(jq -r .head_sha <<< "$run")
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          state=failure
+          if [[ $(jq -r .conclusion <<< "$run") = success ]]; then state=success; fi
+          url=$(jq -r .html_url <<< "$run")
+          gh api "repos/$GH_REPO/statuses/$sha" --method POST \
+            -f state="$state" -f context=CI -f target_url="$url" \
+            -f description="Build and test: $state"
