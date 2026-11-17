@@ -3,6 +3,10 @@ set -eu
 # Use objects from a configured htop-plus build, replacing its backend with a fixture build.
 src=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 build=${1:?configured build}; tests=${2:?test output from run.sh}
+# These integration binaries also run directly, outside ci.sh.
+mkdir -p "$tests/home/.config"
+tests=$(CDPATH= cd -- "$tests" && pwd)
+export HOME="$tests/home" XDG_CONFIG_HOME="$tests/home/.config" HTOPRC="$tests/home/htoprc"
 cc=${CC:-cc}
 mkdir -p "$tests/fixtures/test_mixed/sys/block/sda" "$tests/fixtures/test_mixed/sys/block/sdb"
 sensor="$tests/fixtures/test_mixed/sys/block/sda/device/hwmon0"

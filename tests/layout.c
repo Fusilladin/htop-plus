@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 const char* program = "htop-plus";
 
@@ -33,6 +34,18 @@ static void checkBar(Meter* meter, const char* expected) {
       assert(strstr(right + 1, "55"));
 }
 
+static void checkGraphCell(int y, int x, bool utf8) {
+#ifdef HAVE_LIBNCURSESW
+   /* Read wide cells directly; A_CHARTEXT only describes narrow characters. */
+   wchar_t cell[2] = {0};
+   assert(mvinnwstr(y, x, cell, 1) != ERR);
+   assert(cell[0] == (utf8 ? L'\u28ff' : L':'));
+#else
+   (void)utf8;
+   assert((mvinch(y, x) & A_CHARTEXT) == ':');
+#endif
+}
+
 static void checkCaptionModes(Meter* meter, const char* expected) {
    const int x = 3, y = 2;
    for (int utf8 = 0; utf8 <= 1; utf8++) {
@@ -49,8 +62,9 @@ static void checkCaptionModes(Meter* meter, const char* expected) {
                for (size_t i = 0; i < meter->drawData.nValues; i++)
                   meter->drawData.values[i] = meter->total > 0 ? meter->total : 1;
                meter->draw(meter, x, y, width);
-               assert((mvinch(y, x + strlen(expected)) & A_CHARTEXT) != ' ');
-               assert((mvinch(y, x + width - 1) & A_CHARTEXT) != ' ');
+               /* Every top-row graph cell must be full, starting after the caption. */
+               for (int col = strlen(expected); col < width; col++)
+                  checkGraphCell(y, x + col, utf8);
                for (int row = 1; row < meter->h; row++)
                   for (size_t col = 0; col < strlen(expected); col++)
                      assert((mvinch(y + row, x + col) & A_CHARTEXT) == ' ');
@@ -69,7 +83,9 @@ static void checkCaptionModes(Meter* meter, const char* expected) {
 
 int main(int argc, char** argv) {
    assert(argc == 3);
-   assert(setlocale(LC_ALL, ""));
+   /* This test explicitly exercises UTF-8 even when the container defaults to C. */
+   assert(setlocale(LC_ALL, "C.UTF-8"));
+   assert(MB_CUR_MAX > 1);
    unsigned expected = strtoul(argv[1], NULL, 10);
    CRT_degreeSign = "°";
    static const int colors[LAST_COLORELEMENT] = {0};
