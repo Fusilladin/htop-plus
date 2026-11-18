@@ -19,11 +19,11 @@ $cc ${TEST_CFLAGS:--O2 -g} -D_GNU_SOURCE -DHTOP_PLUS_TESTING -I"$build" -I"$src"
   -c "$src/linux/PlusDevices.c" -o "$tests/fixture-backend.o"
 objects=$(find "$build" -name '*.o' ! -name 'htop.o' ! -name 'PlusDevices.o')
 $cc ${TEST_CFLAGS:--O2 -g} -UNDEBUG -I"$build" -I"$src" -I"$src/linux" \
-  "$src/tests/meters.c" "$tests/fixture-backend.o" $objects -lncursesw -ltinfo -lm -ldl -o "$tests/meters"
+  "$src/tests/meters.c" "$tests/fixture-backend.o" $objects -Wl,--wrap=statvfs -lncursesw -ltinfo -lm -ldl -o "$tests/meters"
 HTOP_PLUS_SYSROOT="$tests/fixtures/test_mixed" NVML_TEST_COUNT=2 LD_LIBRARY_PATH="$tests/stub" "$tests/meters"
 
 $cc ${TEST_CFLAGS:--O2 -g} -UNDEBUG -I"$build" -I"$src" -I"$src/linux" \
-  "$src/tests/layout.c" "$tests/fixture-backend.o" $objects -lncursesw -ltinfo -lm -ldl -o "$tests/layout"
+  "$src/tests/layout.c" "$tests/fixture-backend.o" $objects -Wl,--wrap=statvfs -lncursesw -ltinfo -lm -ldl -o "$tests/layout"
 for scenario in zero_devices one_nvidia two_nvidia amd mixed; do
   case "$scenario" in
     zero_devices) count=0; nv=0;;

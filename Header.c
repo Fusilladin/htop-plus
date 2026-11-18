@@ -81,10 +81,78 @@ void Header_setLayout(Header* this, HeaderLayout hLayout) {
    Header_calculateHeight(this);
 }
 
+#ifdef HTOP_LINUX
+/* Meter names are space-separated htoprc tokens. Escape separators, parentheses,
+   percent signs and non-ASCII bytes while keeping ordinary paths readable. */
+static char* Header_encodeMount(const char* mount) {
+   static const char hex[] = "0123456789ABCDEF";
+   char* encoded = xMalloc(3 * strlen(mount) + 1);
+   char* next = encoded;
+   for (const unsigned char* p = (const unsigned char*)mount; *p; p++) {
+      if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+          (*p >= '0' && *p <= '9') || strchr("/._-", *p)) {
+         *next++ = *p;
+      } else {
+         *next++ = '%';
+         *next++ = hex[*p >> 4];
+         *next++ = hex[*p & 15];
+      }
+   }
+   *next = '\0';
+   return encoded;
+}
+
+static int Header_mountHex(char c) {
+   if (c >= '0' && c <= '9') return c - '0';
+   if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+   return -1;
+}
+
+static bool Header_decodeMount(const char* token, char* mount, size_t size) {
+   size_t n = 0;
+   const char* p;
+   for (p = token; *p != ')'; p++) {
+      if (!*p || n + 1 >= size)
+         return false;
+      unsigned char c = *p;
+      if (c == '%') {
+         if (!p[1] || !p[2])
+            return false;
+         int hi = Header_mountHex(p[1]), lo = Header_mountHex(p[2]);
+         if (hi < 0 || lo < 0 || (hi == 0 && lo == 0))
+            return false;
+         c = (unsigned char)((hi << 4) | lo);
+         p += 2;
+      }
+      mount[n++] = c;
+   }
+   mount[n] = '\0';
+   return p[1] == '\0' && n > 0 && mount[0] == '/';
+}
+#endif
+
 static void Header_addMeterByName(Header* this, const char* name, MeterModeId mode, unsigned int column) {
    assert(column < HeaderLayout_getColumns(this->headerLayout));
 
    Vector* meters = this->columns[column];
+
+#ifdef HTOP_LINUX
+   if (String_startsWith(name, "DiskSpace(/")) {
+      char mount[PATH_MAX];
+      if (!Header_decodeMount(name + strlen("DiskSpace("), mount, sizeof(mount)))
+         return;
+      Meter* meter = Meter_new(this->host, 0, &DiskSpaceMeter_class);
+      if (!DiskSpaceMeter_setMount(meter, mount)) {
+         Meter_delete((Object*)meter);
+         return;
+      }
+      if (mode != 0)
+         Meter_setMode(meter, mode);
+      Vector_add(meters, meter);
+      return;
+   }
+#endif
 
    const char* paren = strchr(name, '(');
    unsigned int param = 0;
@@ -173,6 +241,13 @@ void Header_writeBackToSettings(const Header* this) {
       for (int i = 0; i < len; i++) {
          const Meter* meter = (Meter*) Vector_get(vec, i);
          char* name;
+#ifdef HTOP_LINUX
+         if (As_Meter(meter) == &DiskSpaceMeter_class && *DiskSpaceMeter_getMount(meter)) {
+            char* mount = Header_encodeMount(DiskSpaceMeter_getMount(meter));
+            xAsprintf(&name, "%s(%s)", As_Meter(meter)->name, mount);
+            free(mount);
+         } else
+#endif
          if (meter->param && As_Meter(meter) == &DynamicMeter_class) {
             const char* dynamic = DynamicMeter_lookup(settings->dynamicMeters, meter->param);
             xAsprintf(&name, "%s(%s)", As_Meter(meter)->name, dynamic);

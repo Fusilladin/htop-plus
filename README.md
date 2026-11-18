@@ -36,9 +36,20 @@ to the desired column and select its bar, text, graph or LED mode.
 - **SSD**: busy percentage, read/write throughput, optional controller temperature.
   Includes NVMe, SATA and other block disks; the name is retained for config compatibility.
   Loop, RAM and compressed RAM devices are excluded. Rates use 512-byte kernel sectors.
-- **Mount space**: whole percentage used and available space, following `df`'s
-  treatment of blocks reserved for root. Device-backed mounts and ZFS datasets
-  are listed; pseudo filesystems, squashfs, overlay and network mounts are omitted.
+- **Mount space (DSK)**: `<used>/<size> <pct>% <avail> free`, with one decimal
+  in the percentage and the old adaptive units (for example `1.23G`, `98.7M`).
+  The percentage turns red at 80%. Numbers follow `df`'s treatment of blocks
+  reserved for root: used excludes all free blocks, available excludes reserved
+  blocks, and the percentage is used / (used + available).
+  Device-backed mounts and ZFS datasets are listed; pseudo filesystems,
+  squashfs, overlay and network mounts are omitted.
+  Add **Mount space used/free: /home**, **/data**, **/models**, **/** or any
+  other listed mount in F2 → Meters. Each row saves its path in htoprc, such as
+  `DiskSpace(/home)`, and retains that choice if the discovery order changes.
+  Paths containing spaces or special characters use percent escapes in htoprc.
+  A missing saved mount shows **n/a** until it is mounted again and htop-plus
+  restarts. Older numeric `DiskSpace(N)` settings still load; saving converts
+  valid selections to paths.
 - **VRM**: compact used/total video memory for one GPU. The saved meter name remains
   `VRAM` for configuration compatibility. Legacy unparameterized VRAM
   selections expand into individual device rows when loaded.
@@ -59,15 +70,16 @@ See NVIDIA's API notes:
 https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html
 
 Discovery is a sorted snapshot at startup. Restart after device/mount hotplug
-and check saved selections when hardware changes; numeric selection indices can
-change with the resource list. Mounted paths with spaces are decoded correctly.
+and check SSD/GPU selections when hardware changes; their numeric selection
+indices can change with the resource list. DSK selections retain their saved
+mount paths. Mounted paths with spaces are decoded correctly.
 
 ## Environment variables
 
 | Variable | Effect |
 | --- | --- |
 | `HTOP_PLUS_DISK` | Restrict SSD choices to one block name, e.g. `sda` or `nvme2n1`. No path prefix. |
-| `HTOP_PLUS_MOUNT` | Restrict space choices to one absolute mount path. |
+| `HTOP_PLUS_MOUNT` | Restrict space choices to one absolute mount path and override every DSK row for this run. Saved path selections are retained. |
 | `HTOP_PLUS_SYSROOT` | Fake filesystem root **only in test builds** compiled with `HTOP_PLUS_TESTING`. Ignored by release builds. |
 
 No disk-guard integration, download control or fixed personal mount paths are included.

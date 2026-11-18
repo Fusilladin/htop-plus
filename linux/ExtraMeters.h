@@ -22,6 +22,10 @@ typedef enum {
    plus how long it has been that color when showTimer; no parts without a sensor */
 void ExtraMeters_temperature(ExtraTemp which, Meter* meter, bool showTimer);
 
+/* Saved selection (before HTOP_PLUS_MOUNT override), retained even when unmounted. */
+const char* DiskSpaceMeter_getMount(const Meter* meter);
+bool DiskSpaceMeter_setMount(Meter* meter, const char* mount);
+
 extern const MeterClass DiskSpaceMeter_class;
 
 

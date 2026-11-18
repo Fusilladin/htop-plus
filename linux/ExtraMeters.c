@@ -50,10 +50,50 @@ static const char* SSDMeter_device(const Meter* meter) {
    return index < d->diskCount ? d->disks[index].name : "";
 }
 
-static const char* DiskSpaceMeter_mount(const Meter* meter) {
+/* Keep the selected path independent of the startup discovery index. */
+const char* DiskSpaceMeter_getMount(const Meter* this) {
+   return this->meterData ? (const char*)this->meterData : "";
+}
+
+bool DiskSpaceMeter_setMount(Meter* this, const char* mount) {
+   if (*mount != '/' || strlen(mount) >= PATH_MAX)
+      return false;
+   char* selected = xStrdup(mount);
+   free(this->meterData);
+   this->meterData = selected;
+   this->param = 0;
    const PlusDevices* d = Plus_devices();
-   size_t index = meter->param ? meter->param - 1 : 0;
-   return index < d->mountCount ? d->mounts[index].path : "";
+   for (size_t i = 0; i < d->mountCount; i++) {
+      if (String_eq(d->mounts[i].path, selected)) {
+         this->param = (unsigned int)i + 1;
+         break;
+      }
+   }
+   return true;
+}
+
+static void DiskSpaceMeter_init(Meter* this) {
+   if (this->meterData)
+      return;
+   const PlusDevices* d = Plus_devices();
+   size_t index = this->param ? this->param - 1 : 0;
+   if (index < d->mountCount)
+      this->meterData = xStrdup(d->mounts[index].path);
+}
+
+static const char* DiskSpaceMeter_mount(const Meter* this) {
+   const char* override = getenv("HTOP_PLUS_MOUNT");
+   if (override && *override)
+      return *override == '/' && strlen(override) < PATH_MAX ? override : "";
+   return DiskSpaceMeter_getMount(this);
+}
+
+static bool DiskSpaceMeter_available(const char* mount) {
+   const PlusDevices* d = Plus_devices();
+   for (size_t i = 0; i < d->mountCount; i++)
+      if (String_eq(d->mounts[i].path, mount))
+         return true;
+   return false;
 }
 
 static void DiskMeter_init(Meter* this) {
@@ -113,18 +153,38 @@ static void SSDMeter_updateValues(Meter* this) {
    ExtraMeters_temperature(EXTRA_TEMP_SSD, this, false);
 }
 
+/* Match the old local meter's disk-guard threshold, without download control. */
+#define DISK_SPACE_LIMIT 80.0
+
 static void DiskSpaceMeter_updateValues(Meter* this) {
    double used, size, avail;
    const char* mount = DiskSpaceMeter_mount(this);
-   if (!*mount || !Plus_mountSample(mount, &used, &size, &avail)) {
+   this->txtHighlightLen = 0;
+   if (!*mount || !DiskSpaceMeter_available(mount) || !Plus_mountSample(mount, &used, &size, &avail)) {
       DiskMeter_unavailable(this);
       return;
    }
+   /* df excludes root-reserved blocks from both used and available. */
    this->total = used + avail;
    this->values[0] = used;
-   char a[16];
-   Meter_humanUnitCompact(a, avail, sizeof(a), false);
-   snprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0f%% %s free", 100.0 * used / this->total, a);
+   char usedText[16], sizeText[16], availText[16];
+   Meter_humanUnit(usedText, used, sizeof(usedText));
+   Meter_humanUnit(sizeText, size, sizeof(sizeText));
+   Meter_humanUnit(availText, avail, sizeof(availText));
+   double percent = 100.0 * used / this->total;
+   int written = xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%s/%s ", usedText, sizeText);
+   int percentLen = xSnprintf(this->txtBuffer + written, sizeof(this->txtBuffer) - (size_t)written, "%.1f%%", percent);
+   xSnprintf(this->txtBuffer + written + percentLen, sizeof(this->txtBuffer) - (size_t)(written + percentLen),
+             " %s free", availText);
+   this->txtHighlightStart = (size_t)written;
+   this->txtHighlightLen = percent >= DISK_SPACE_LIMIT ? (size_t)percentLen : 0;
+}
+
+static void DiskSpaceMeter_display(const Object* cast, RichString* out) {
+   const Meter* this = (const Meter*)cast;
+   RichString_writeAscii(out, CRT_colors[this->total > 0 ? METER_VALUE : METER_VALUE_NOTICE], this->txtBuffer);
+   if (this->txtHighlightLen)
+      RichString_setAttrn(out, CRT_colors[METER_VALUE_ERROR], this->txtHighlightStart, this->txtHighlightLen);
 }
 
 const MeterClass SSDMeter_class = {
@@ -137,7 +197,8 @@ const MeterClass SSDMeter_class = {
 };
 
 const MeterClass DiskSpaceMeter_class = {
-   .super = { .extends = Class(Meter), .delete = Meter_delete },
+   .super = { .extends = Class(Meter), .delete = Meter_delete, .display = DiskSpaceMeter_display },
+   .init = DiskSpaceMeter_init, .done = DiskMeter_done,
    .getUiName = DiskMeter_name, .updateValues = DiskSpaceMeter_updateValues,
    .defaultMode = BAR_METERMODE, .supportedModes = METERMODE_DEFAULT_SUPPORTED,
    .maxItems = 1, .total = 100, .attributes = DiskSpaceMeter_attributes,

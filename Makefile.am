@@ -9,7 +9,7 @@ endif
 dist_man_MANS = htop-plus.1
 EXTRA_DIST = \
 	tests/run.sh tests/probe.c tests/nvml-stub.c tests/test_devices.py \
-	tests/meters.c tests/layout.c tests/meters.sh tests/pty_smoke.py tests/cpu_budget.py tests/ci.sh \
+	tests/meters.c tests/layout.c tests/mount-sample.h tests/meters.sh tests/pty_smoke.py tests/cpu_budget.py tests/ci.sh \
 	scripts/build-static.sh \
 	$(dist_man_MANS) \
 	autogen.sh \

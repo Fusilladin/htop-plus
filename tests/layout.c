@@ -7,6 +7,7 @@
 #include "linux/ExtraMeters.h"
 #include "linux/LinuxMachine.h"
 #include "linux/PlusDevices.h"
+#include "tests/mount-sample.h"
 #include <assert.h>
 #include <locale.h>
 #include <stdio.h>
@@ -26,8 +27,12 @@ static void checkBar(Meter* meter, const char* expected) {
    const char* right = strchr(line, ']');
    assert(left && right && right > left);
    size_t width = right - left - 1, length = strlen(expected);
-   assert(length < width / 2); /* most of the bar remains available */
-   assert(!strncmp(right - length, expected, length)); /* right aligned, complete */
+   assert(length < width); /* the complete value fits in this column */
+   const char* value = right - length;
+   for (size_t i = 0; i < length; i++) {
+      /* The existing bar renderer fills spaces inside text with bar marks. */
+      assert(value[i] == expected[i] || (expected[i] == ' ' && value[i] == '|'));
+   }
    assert(!strncmp(line, Meter_getCaption(meter), strlen(Meter_getCaption(meter))));
    /* No change to the colored temperature column outside the bar. */
    if (meter->tempPartCount)
@@ -88,7 +93,7 @@ int main(int argc, char** argv) {
    assert(MB_CUR_MAX > 1);
    unsigned expected = strtoul(argv[1], NULL, 10);
    CRT_degreeSign = "°";
-   static const int colors[LAST_COLORELEMENT] = {0};
+   static const int colors[LAST_COLORELEMENT] = { [METER_VALUE_ERROR] = A_BOLD };
    CRT_colors = colors;
    LinuxMachine linuxHost = {0};
    Machine* host = &linuxHost.super;
@@ -167,12 +172,44 @@ int main(int argc, char** argv) {
       checkBar(gpu, "1.5G/8.0G");
       Meter_delete((Object*)gpu);
    }
+   /* A fixture mount with deterministic reserved blocks exercises the real formatter. */
+   assert(setenv("HTOP_PLUS_MOUNT", "/", 1) == 0);
+   Plus_cleanup();
    Meter* disk = Meter_new(host, 1, &DiskSpaceMeter_class);
-   /* Rendering examples use the production formatter and real draw callback. */
-   char value[16];
-   Meter_humanUnitCompact(value, 398.0 * 1024 * 1024, sizeof(value), false);
-   snprintf(disk->txtBuffer, sizeof(disk->txtBuffer), "%.0f%% %s free", 56.3, value);
-   checkBar(disk, "56% 398G free");
+   Meter_updateValues(disk);
+   checkBar(disk, "576G/1.00T 60.0% 384G free");
+   checkCaptionModes(disk, "DSK");
+   testMountSample.f_bfree = 256 * 1024;
+   testMountSample.f_bavail = 192 * 1024;
+   Meter_updateValues(disk);
+   checkBar(disk, "768G/1.00T 80.0% 192G free");
+   char line[81];
+   assert(mvinnstr(0, 0, line, 80) != ERR);
+   const char* percent = strstr(line, "80.0%");
+   assert(percent);
+   for (int i = 0; i < 5; i++)
+      assert((mvinch(0, (int)(percent - line) + i) & A_BOLD) != 0);
+   assert((mvinch(0, (int)(percent - line) - 1) & A_BOLD) == 0);
+   assert((mvinch(0, (int)(percent - line) + 5) & A_BOLD) == 0);
+   Meter_setMode(disk, TEXT_METERMODE);
+   erase();
+   disk->draw(disk, 0, 0, 80);
+   assert(mvinnstr(0, 0, line, 80) != ERR);
+   assert(strstr(line, disk->txtBuffer));
+   percent = strstr(line, "80.0%");
+   assert(percent);
+   for (int i = 0; i < 5; i++)
+      assert((mvinch(0, (int)(percent - line) + i) & A_BOLD) != 0);
+   /* Cooling below the limit clears both bar and text highlighting. */
+   testMountSample.f_bfree = 448 * 1024;
+   testMountSample.f_bavail = 384 * 1024;
+   Meter_updateValues(disk);
+   assert(disk->txtHighlightLen == 0);
+   erase();
+   disk->draw(disk, 0, 0, 80);
+   assert(mvinnstr(0, 0, line, 80) != ERR);
+   percent = strstr(line, "60.0%");
+   assert(percent && (mvinch(0, (int)(percent - line)) & A_BOLD) == 0);
    Meter_delete((Object*)disk);
    Meter* ssd = Meter_new(host, 1, &SSDMeter_class);
    char read[16], write[16];
@@ -188,6 +225,6 @@ int main(int argc, char** argv) {
    Header_delete(header);
    Settings_delete(settings);
    Plus_cleanup();
-   printf("Default and legacy GPU rows: %u; full captions in bar/text/graph/LED (ASCII/UTF-8, full/half width), aligned compact bars: PASS\n", expected);
+   printf("Default and legacy GPU rows: %u; full captions in bar/text/graph/LED (ASCII/UTF-8, full/half width), aligned bars and exact DSK text/limit highlighting: PASS\n", expected);
    return 0;
 }
