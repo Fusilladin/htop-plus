@@ -44,6 +44,14 @@ typedef struct {
 static const int SSDMeter_attributes[] = { METER_VALUE_IOWRITE };
 static const int DiskSpaceMeter_attributes[] = { METER_VALUE_IOWRITE };
 
+/* Include missing saved selections in the same caption namespace as discovery. */
+typedef struct DiskSpaceMeterEntry_ {
+   Meter* meter;
+   struct DiskSpaceMeterEntry_* next;
+} DiskSpaceMeterEntry;
+
+static DiskSpaceMeterEntry* diskSpaceMeters;
+
 static const char* SSDMeter_device(const Meter* meter) {
    const PlusDevices* d = Plus_devices();
    size_t index = meter->param ? meter->param - 1 : 0;
@@ -54,6 +62,9 @@ static const char* SSDMeter_device(const Meter* meter) {
 const char* DiskSpaceMeter_getMount(const Meter* this) {
    return this->meterData ? (const char*)this->meterData : "";
 }
+
+static void DiskSpaceMeter_caption(Meter* this);
+static void DiskSpaceMeter_refreshCaptions(const Machine* host);
 
 bool DiskSpaceMeter_setMount(Meter* this, const char* mount) {
    if (*mount != '/' || strlen(mount) >= PATH_MAX)
@@ -69,16 +80,27 @@ bool DiskSpaceMeter_setMount(Meter* this, const char* mount) {
          break;
       }
    }
+   DiskSpaceMeter_refreshCaptions(this->host);
    return true;
 }
 
 static void DiskSpaceMeter_init(Meter* this) {
-   if (this->meterData)
-      return;
-   const PlusDevices* d = Plus_devices();
-   size_t index = this->param ? this->param - 1 : 0;
-   if (index < d->mountCount)
-      this->meterData = xStrdup(d->mounts[index].path);
+   DiskSpaceMeterEntry* entry;
+   for (entry = diskSpaceMeters; entry; entry = entry->next)
+      if (entry->meter == this)
+         break;
+   if (!entry) {
+      entry = xMalloc(sizeof(*entry));
+      *entry = (DiskSpaceMeterEntry){ .meter = this, .next = diskSpaceMeters };
+      diskSpaceMeters = entry;
+   }
+   if (!this->meterData) {
+      const PlusDevices* d = Plus_devices();
+      size_t index = this->param ? this->param - 1 : 0;
+      if (index < d->mountCount)
+         this->meterData = xStrdup(d->mounts[index].path);
+   }
+   DiskSpaceMeter_refreshCaptions(this->host);
 }
 
 static const char* DiskSpaceMeter_mount(const Meter* this) {
@@ -86,6 +108,111 @@ static const char* DiskSpaceMeter_mount(const Meter* this) {
    if (override && *override)
       return *override == '/' && strlen(override) < PATH_MAX ? override : "";
    return DiskSpaceMeter_getMount(this);
+}
+
+/* ASCII letters keep the caption exactly three terminal columns in every locale. */
+static void mountLetters(const char* path, char letters[PATH_MAX]) {
+   const char* end = path + strlen(path);
+   while (end > path && end[-1] == '/')
+      end--;
+   const char* start = end;
+   while (start > path && start[-1] != '/')
+      start--;
+   size_t n = 0;
+   for (const char* p = start; p < end; p++) {
+      if (*p >= 'a' && *p <= 'z')
+         letters[n++] = *p - 'a' + 'A';
+      else if (*p >= 'A' && *p <= 'Z')
+         letters[n++] = *p;
+   }
+   if (!n) {
+      strcpy(letters, end == path && *path == '/' ? "ROOT" : "MNT");
+      return;
+   }
+   while (n < 3) {
+      letters[n] = letters[n - 1];
+      n++;
+   }
+   letters[n] = '\0';
+}
+
+typedef struct {
+   const char* path;
+   char base[4], caption[4];
+} MountCaption;
+
+static int compareMountCaption(const void* a, const void* b) {
+   return strcmp(((const MountCaption*)a)->path, ((const MountCaption*)b)->path);
+}
+
+static bool mountCaptionTaken(const MountCaption* mounts, size_t count, size_t assigned, const char* caption) {
+   /* Reserve natural abbreviations even for mounts assigned later. */
+   for (size_t i = 0; i < count; i++)
+      if (String_eq(mounts[i].base, caption) || (i < assigned && String_eq(mounts[i].caption, caption)))
+         return true;
+   return false;
+}
+
+static void DiskSpaceMeter_caption(Meter* this) {
+   const char* selected = DiskSpaceMeter_mount(this);
+   const PlusDevices* d = Plus_devices();
+   size_t extra = 1;
+   for (const DiskSpaceMeterEntry* e = diskSpaceMeters; e; e = e->next)
+      if (e->meter->host == this->host)
+         extra++;
+   MountCaption* mounts = xCalloc(d->mountCount + extra, sizeof(*mounts));
+   size_t count = d->mountCount;
+   for (size_t i = 0; i < count; i++)
+      mounts[i].path = d->mounts[i].path;
+   for (const DiskSpaceMeterEntry* e = diskSpaceMeters; e; e = e->next)
+      if (e->meter->host == this->host)
+         mounts[count++].path = DiskSpaceMeter_mount(e->meter);
+   mounts[count++].path = selected;
+   qsort(mounts, count, sizeof(*mounts), compareMountCaption);
+   size_t unique = 0;
+   for (size_t i = 0; i < count; i++)
+      if (!unique || !String_eq(mounts[i].path, mounts[unique - 1].path))
+         mounts[unique++] = mounts[i];
+   count = unique;
+   char letters[PATH_MAX];
+   for (size_t i = 0; i < count; i++) {
+      mountLetters(mounts[i].path, letters);
+      memcpy(mounts[i].base, letters, 3);
+   }
+   for (size_t i = 0; i < count; i++) {
+      MountCaption* m = &mounts[i];
+      strcpy(m->caption, m->base);
+      bool duplicate = false;
+      for (size_t j = 0; j < i; j++)
+         duplicate |= String_eq(mounts[j].caption, m->caption);
+      if (duplicate) {
+         mountLetters(m->path, letters);
+         size_t len = strlen(letters);
+         m->caption[2] = letters[len - 1];
+         if (mountCaptionTaken(mounts, count, i, m->caption)) {
+            m->caption[1] = letters[len - 2];
+            if (mountCaptionTaken(mounts, count, i, m->caption)) {
+               /* Identical basenames and punctuation-only names need a final tie-break. */
+               for (unsigned code = 0; code < 26 * 26 * 26; code++) {
+                  m->caption[0] = 'A' + code / (26 * 26);
+                  m->caption[1] = 'A' + code / 26 % 26;
+                  m->caption[2] = 'A' + code % 26;
+                  if (!mountCaptionTaken(mounts, count, i, m->caption))
+                     break;
+               }
+            }
+         }
+      }
+      if (String_eq(m->path, selected) && !String_eq(this->caption, m->caption))
+         Meter_setCaption(this, m->caption);
+   }
+   free(mounts);
+}
+
+static void DiskSpaceMeter_refreshCaptions(const Machine* host) {
+   for (DiskSpaceMeterEntry* e = diskSpaceMeters; e; e = e->next)
+      if (e->meter->host == host)
+         DiskSpaceMeter_caption(e->meter);
 }
 
 static bool DiskSpaceMeter_available(const char* mount) {
@@ -104,6 +231,16 @@ static void DiskMeter_init(Meter* this) {
 static void DiskMeter_done(Meter* this) {
    if (As_Meter(this) == &SSDMeter_class && this->meterData)
       free(((DiskState*)this->meterData)->temperature);
+   if (As_Meter(this) == &DiskSpaceMeter_class) {
+      for (DiskSpaceMeterEntry** e = &diskSpaceMeters; *e; e = &(*e)->next) {
+         if ((*e)->meter == this) {
+            DiskSpaceMeterEntry* removed = *e;
+            *e = removed->next;
+            free(removed);
+            break;
+         }
+      }
+   }
    free(this->meterData);
    this->meterData = NULL;
 }
@@ -159,6 +296,7 @@ static void SSDMeter_updateValues(Meter* this) {
 static void DiskSpaceMeter_updateValues(Meter* this) {
    double used, size, avail;
    const char* mount = DiskSpaceMeter_mount(this);
+   DiskSpaceMeter_caption(this);
    this->txtHighlightLen = 0;
    if (!*mount || !DiskSpaceMeter_available(mount) || !Plus_mountSample(mount, &used, &size, &avail)) {
       DiskMeter_unavailable(this);

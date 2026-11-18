@@ -46,6 +46,17 @@ to the desired column and select its bar, text, graph or LED mode.
   Add **Mount space used/free: /home**, **/data**, **/models**, **/** or any
   other listed mount in F2 → Meters. Each row saves its path in htoprc, such as
   `DiskSpace(/home)`, and retains that choice if the discovery order changes.
+  Header captions use three uppercase letters from the last path component:
+  `/` → `ROO`, `/home` → `HOM`, `/data` → `DAT`, `/models` → `MOD`,
+  `/boot/efi` → `EFI`. F2 labels retain the full path. Captions use ASCII letters,
+  skipping punctuation and digits; short names repeat their last letter, and
+  names without ASCII letters use `MNT`. Collisions across discovered mounts
+  keep the first path's caption in sorted path order, then try the first two
+  and last letter, the first and last two letters, and an unused three-letter
+  code. Natural captions are reserved before fallbacks are assigned. Active
+  saved paths participate even while unmounted; duplicate rows for one path
+  share a caption. Captions can change when the mount/selection set changes;
+  saved paths remain intact.
   Paths containing spaces or special characters use percent escapes in htoprc.
   A missing saved mount shows **n/a** until it is mounted again and htop-plus
   restarts. Older numeric `DiskSpace(N)` settings still load; saving converts

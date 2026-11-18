@@ -73,9 +73,14 @@ static void savedMounts(Machine* host, Settings* settings) {
    Header_addMeterByClass(header, &VRAMMeter_class, 2, 1);
    /* Sorted list: /, /boot/efi, /data, /home, /models, /odd space(%)=disk. */
    const char* paths[] = { "/", "/boot/efi", "/data", "/home", "/models", "/odd space(%)=disk" };
+   const char* captions[] = { "ROO", "EFI", "DAT", "HOM", "MOD", "ODD" };
    for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
       Meter* meter = Header_addMeterByClass(header, &DiskSpaceMeter_class, i + 1, 0);
       assert(!strcmp(DiskSpaceMeter_getMount(meter), paths[i]));
+      assert(!strcmp(Meter_getCaption(meter), captions[i]));
+      char label[PATH_MAX + 80];
+      Meter_getUiName(meter, label, sizeof(label));
+      assert(!strcmp(label + strlen("Mount space used/free: "), paths[i]));
       Meter_setMode(meter, i % 2 ? TEXT_METERMODE : BAR_METERMODE);
    }
    Header_writeBackToSettings(header);
@@ -99,6 +104,7 @@ static void savedMounts(Machine* host, Settings* settings) {
       assert(meter->param == (i ? i + 2 : 1));
       assert(meter->mode == (i % 2 ? TEXT_METERMODE : BAR_METERMODE));
       Meter_updateValues(meter);
+      assert(!strcmp(Meter_getCaption(meter), captions[i]));
       assert(!strcmp(meter->txtBuffer, "576G/1.00T 60.0% 384G free"));
    }
    Header_reinit(header);
@@ -113,6 +119,7 @@ static void savedMounts(Machine* host, Settings* settings) {
    Meter_updateValues(missing);
    assert(missing->total == 0 && !strcmp(missing->txtBuffer, "n/a"));
    assert(!strcmp(DiskSpaceMeter_getMount(missing), "/home"));
+   assert(!strcmp(Meter_getCaption(missing), "HOM"));
    Header_writeBackToSettings(header);
    assert(!strcmp(loaded->hColumns[0].names[3], "DiskSpace(/home)"));
 
@@ -127,6 +134,7 @@ static void savedMounts(Machine* host, Settings* settings) {
       char label[80];
       Meter_getUiName(meter, label, sizeof(label));
       assert(strstr(label, "/data"));
+      assert(!strcmp(Meter_getCaption(meter), "DAT"));
       assert(!strcmp(DiskSpaceMeter_getMount(meter), paths[i]));
    }
    Header_writeBackToSettings(header);
@@ -135,11 +143,13 @@ static void savedMounts(Machine* host, Settings* settings) {
    Plus_cleanup();
    Meter_updateValues(columnMeter(header, 0));
    assert(!strcmp(columnMeter(header, 0)->txtBuffer, "n/a"));
+   assert(!strcmp(Meter_getCaption(columnMeter(header, 0)), "MIS"));
    assert(unsetenv("HTOP_PLUS_MOUNT") == 0);
    mountsFile(false, true);
    Header_populateFromSettings(header);
    Meter_updateValues(columnMeter(header, 3));
    assert(columnMeter(header, 3)->total > 0);
+   assert(!strcmp(Meter_getCaption(columnMeter(header, 3)), "HOM"));
 
    /* Legacy numeric and unparameterized names migrate on save. */
    free(loaded->hColumns[0].names[0]);
@@ -165,6 +175,67 @@ static void savedMounts(Machine* host, Settings* settings) {
    Header_delete(header);
    Settings_delete(loaded);
    host->settings = settings;
+}
+
+static void mountCaptions(Machine* host) {
+   assert(unsetenv("HTOP_PLUS_MOUNT") == 0);
+   /* Reverse file order proves discovery sorting, rather than meter creation order,
+      resolves collisions. /dae reserves the first fallback for /database. */
+   const char* paths[] = { "/a", "/ab", "/bar/log", "/baz/log", "/dae", "/data",
+                          "/database", "/foo/log", "/home", "/homelab", "/media/My-Disk2/",
+                          "/media/123", "/media/é", "/z/aaa" };
+   const char* captions[] = { "AAA", "ABB", "LOG", "AAB", "DAE", "DAT",
+                             "DSE", "AAC", "HOM", "HOB", "MYD", "MNT", "AAD", "AAE" };
+   char path[PATH_MAX];
+   assert(Plus_path(path, sizeof(path), "/proc/self/mounts"));
+   FILE* fp = fopen(path, "w");
+   assert(fp);
+   for (size_t i = sizeof(paths) / sizeof(paths[0]); i > 0; i--)
+      fprintf(fp, "/dev/test%zu %s ext4 rw 0 0\n", i, paths[i - 1]);
+   assert(fclose(fp) == 0);
+   Plus_cleanup();
+   for (size_t i = sizeof(paths) / sizeof(paths[0]); i > 0; i--) {
+      Meter* meter = Meter_new(host, 0, &DiskSpaceMeter_class);
+      assert(DiskSpaceMeter_setMount(meter, paths[i - 1]));
+      assert(!strcmp(Meter_getCaption(meter), captions[i - 1]));
+      Meter_updateValues(meter); /* n/a must preserve identity too. */
+      assert(!strcmp(Meter_getCaption(meter), captions[i - 1]));
+      char label[PATH_MAX + 80];
+      Meter_getUiName(meter, label, sizeof(label));
+      assert(!strcmp(label + strlen("Mount space used/free: "), paths[i - 1]));
+      assert(strlen(Meter_getCaption(meter)) == 3);
+      for (const char* p = Meter_getCaption(meter); *p; p++)
+         assert(*p >= 'A' && *p <= 'Z');
+      assert(DiskSpaceMeter_setMount(meter, "/home"));
+      assert(!strcmp(Meter_getCaption(meter), "HOM"));
+      Meter_delete((Object*)meter);
+   }
+   mountsFile(false, true);
+   /* Two absent saved paths, a duplicate row and a discovered collision must
+      agree on one mapping, including immediate changes before sampling. */
+   Meter* missingA = Meter_new(host, 0, &DiskSpaceMeter_class);
+   Meter* missingB = Meter_new(host, 0, &DiskSpaceMeter_class);
+   Meter* duplicate = Meter_new(host, 0, &DiskSpaceMeter_class);
+   Meter* present = Meter_new(host, 0, &DiskSpaceMeter_class);
+   assert(DiskSpaceMeter_setMount(missingB, "/z/database"));
+   assert(DiskSpaceMeter_setMount(missingA, "/z/data"));
+   assert(DiskSpaceMeter_setMount(duplicate, "/z/data"));
+   assert(DiskSpaceMeter_setMount(present, "/data"));
+   assert(!strcmp(Meter_getCaption(present), "DAT"));
+   assert(!strcmp(Meter_getCaption(missingA), "DAA"));
+   assert(!strcmp(Meter_getCaption(duplicate), "DAA"));
+   assert(!strcmp(Meter_getCaption(missingB), "DAE"));
+   Meter_updateValues(missingA);
+   Meter_updateValues(missingB);
+   assert(!strcmp(missingA->txtBuffer, "n/a") && !strcmp(missingB->txtBuffer, "n/a"));
+   assert(!strcmp(Meter_getCaption(missingA), "DAA"));
+   assert(!strcmp(Meter_getCaption(missingB), "DAE"));
+   Meter_delete((Object*)missingA);
+   Meter_delete((Object*)duplicate);
+   Meter_updateValues(missingB);
+   assert(!strcmp(Meter_getCaption(missingB), "DAE"));
+   Meter_delete((Object*)missingB);
+   Meter_delete((Object*)present);
 }
 
 int main(void) {
@@ -254,8 +325,9 @@ int main(void) {
    assert(missing->total == 0 && !strcmp(missing->txtBuffer, "n/a"));
    Meter_delete((Object*)gpu); Meter_delete((Object*)one); Meter_delete((Object*)missing);
    savedMounts(&host, settings);
+   mountCaptions(&host);
    Settings_delete(settings);
    Plus_cleanup();
-   puts("Meter deltas, counter reset, duplicate independence, per-GPU samples, missing GPU, temperatures, DSK format/limits, mount-path htoprc round-trip, reorder/missing/override/legacy: PASS");
+   puts("Meter deltas, counter reset, duplicate independence, per-GPU samples, missing GPU, temperatures, DSK format/limits, mount-path htoprc round-trip, reorder/missing/override/legacy, three-letter captions/collisions/full Setup paths: PASS");
    return 0;
 }

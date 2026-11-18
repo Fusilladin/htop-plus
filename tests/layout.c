@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
    Meter* disk = Meter_new(host, 1, &DiskSpaceMeter_class);
    Meter_updateValues(disk);
    checkBar(disk, "576G/1.00T 60.0% 384G free");
-   checkCaptionModes(disk, "DSK");
+   checkCaptionModes(disk, "ROO");
    testMountSample.f_bfree = 256 * 1024;
    testMountSample.f_bavail = 192 * 1024;
    Meter_updateValues(disk);
@@ -211,6 +211,16 @@ int main(int argc, char** argv) {
    percent = strstr(line, "60.0%");
    assert(percent && (mvinch(0, (int)(percent - line)) & A_BOLD) == 0);
    Meter_delete((Object*)disk);
+   const char* mounts[] = { "/home", "/data", "/models", "/boot/efi" };
+   const char* captions[] = { "HOM", "DAT", "MOD", "EFI" };
+   for (size_t i = 0; i < sizeof(mounts) / sizeof(mounts[0]); i++) {
+      assert(setenv("HTOP_PLUS_MOUNT", mounts[i], 1) == 0);
+      Plus_cleanup();
+      disk = Meter_new(host, 1, &DiskSpaceMeter_class);
+      Meter_updateValues(disk);
+      checkCaptionModes(disk, captions[i]);
+      Meter_delete((Object*)disk);
+   }
    Meter* ssd = Meter_new(host, 1, &SSDMeter_class);
    char read[16], write[16];
    Meter_humanUnitCompact(read, 13.2 * 1024, sizeof(read), false);
