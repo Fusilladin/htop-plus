@@ -60,7 +60,7 @@ in the source distribution for its full text.
 #define ColorPairWhiteDefault  ColorPair(Red, Red)
 #define ColorIndexWhiteDefault ColorIndex(Red, Red)
 
-/* htop-plus: slate grey-blue (256-color index 103, #8787af), falls back to blue on 8/16-color terminals */
+/* htop-plus: neutral grey (256-color index 242, #6c6c6c, so reclaimable cache reads as background), falls back to blue on 8/16-color terminals */
 #define ColorPairSlateBlue  ColorPair(Yellow, Yellow)
 #define ColorIndexSlateBlue ColorIndex(Yellow, Yellow)
 
@@ -1263,7 +1263,7 @@ void CRT_setColors(int colorScheme) {
 
    init_pair(ColorIndexWhiteDefault, White, -1);
 
-   init_pair(ColorIndexSlateBlue, COLORS >= 256 ? 103 : Blue, grayBlackBg);
+   init_pair(ColorIndexSlateBlue, COLORS >= 256 ? 242 : Blue, grayBlackBg);
 
    if (COLORS >= 256 && COLOR_PAIRS > ColorIndexSoftRed) {
       init_pair(ColorIndexSoftGreen,   77,  grayBlackBg);

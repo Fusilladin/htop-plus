@@ -161,11 +161,12 @@ static void BarMeterMode_draw(Meter* this, int x, int y, int w) {
    for (uint8_t i = 0; i < this->curItems; i++) {
       int attr = this->curAttributes ? this->curAttributes[i] : Meter_attributes(this)[i];
       int color = CRT_colors[attr];
-      // Bars take their caption's color; reclaimable cache segments are drawn dim
+      // Bars take their caption's color; reclaimable cache segments are drawn in the grey cache color
       if (As_Meter(this)->captionColor) {
-         color = CRT_colors[As_Meter(this)->captionColor];
          if (attr == MEMORY_BUFFERS || attr == MEMORY_CACHE || attr == SWAP_CACHE)
-            color = (color & ~A_BOLD) | A_DIM;
+            color = CRT_colors[MEMORY_CACHE];
+         else
+            color = CRT_colors[As_Meter(this)->captionColor];
       }
       RichString_setAttrn(&bar, color, startPos + offset, blockSizes[i]);
       RichString_printoffnVal(bar, y, x + offset, startPos + offset, MINIMUM(blockSizes[i], w - offset));
